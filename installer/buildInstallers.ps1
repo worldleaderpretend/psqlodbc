@@ -18,6 +18,9 @@
     Specify the configuration xml file name if you want to use
     the configuration file other than standard one.
     The relative path is relative to the current directory.
+.PARAMETER DatabaseInstallPath
+    Specify the Postgres installation directory.  If absent, it will search
+    for this path in Program Files directory.
 .EXAMPLE
     > .\buildInstallers
 	Build 32bit and 64bit installers.
@@ -37,7 +40,8 @@ Param(
 [switch]$ExcludeRuntime,
 [switch]$RedistUCRT,
 [switch]$NoPDB,
-[string]$BuildConfigPath
+[string]$BuildConfigPath,
+[string]$DatabaseInstallPath
 )
 
 [int]$ucrt_version=14
@@ -149,7 +153,12 @@ function findRuntime([int]$toolset_no, [String]$pgmvc)
 
 function buildInstaller([string]$CPUTYPE)
 {
-	$LIBPQBINDIR=getPGDir $configInfo $CPUTYPE "bin"
+    if ("$DatabaseInstallPath" -eq "") {
+        $LIBPQBINDIR=getPGDir $configInfo $CPUTYPE "bin"
+	} else {
+        $LIBPQBINDIR="$DatabaseInstallPath\bin"
+	}
+
 	# msvc runtime psqlodbc links
 	$PODBCMSVCDLL = ""
 	$PODBCMSVPDLL = ""

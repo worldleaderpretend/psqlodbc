@@ -28,6 +28,9 @@
     Specify the configuration xml file name if you want to use
     the configuration file other than standard one.
     The relative path is relative to the current directory.
+.PARAMETER DatabaseInstallPath
+    Specify the Postgres installation directory.  If absent, it will search
+    for this path in Program Files directory.
 .EXAMPLE
     > .\BuildAll
 	Build with default or automatically selected parameters.
@@ -63,7 +66,8 @@ Param(
 [ValidateSet("Debug", "Release")]
 [String]$Configuration="Release",
 [string]$BuildConfigPath,
-[switch]$AlongWithInstallers
+[switch]$AlongWithInstallers,
+[string]$DatabaseInstallPath
 )
 
 function buildPlatform([xml]$configInfo, [string]$Platform)
@@ -74,9 +78,16 @@ function buildPlatform([xml]$configInfo, [string]$Platform)
 		$platinfo=$configInfo.Configuration.x86
 	}
 	$BUILD_MACROS=$platinfo.build_macros
-	$PG_INC=getPGDir $configInfo $Platform "include"
-	$PG_LIB=getPGDir $configInfo $Platform "lib"
-	$PG_BIN=getPGDir $configInfo $Platform "bin"
+
+    if ("$DatabaseInstallPath" -eq "") {
+        $PG_INC=getPGDir $configInfo $Platform "include"
+        $PG_LIB=getPGDir $configInfo $Platform "lib"
+        $PG_BIN=getPGDir $configInfo $Platform "bin"
+	} else {
+        $PG_INC="$DatabaseInstallPath\include"
+        $PG_LIB="$DatabaseInstallPath\lib"
+        $PG_BIN="$DatabaseInstallPath\bin"
+	}
 
 	Write-Host "USE LIBPQ  : ($PG_INC $PG_LIB $PG_BIN)"
 
@@ -180,7 +191,7 @@ try {
                 if ($Platform -eq "win32") {
                         $cpu = "x86"
                 }
-                ..\installer\buildInstallers.ps1 -cpu $cpu -BuildConfigPath $BuildConfigPath
+                ..\installer\buildInstallers.ps1 -cpu $cpu -BuildConfigPath $BuildConfigPath -DatabaseInstallPath $DatabaseInstallPath
                 if ($LASTEXITCODE -ne 0) {
                         throw "Failed to build installers"
                 }

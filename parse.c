@@ -681,8 +681,6 @@ MYLOG(0, "updatable=%d tab=%d fields=%d", updatable, stmt->ntab, num_fields);
 	{
 		if (1 > stmt->ntab)
 			updatable = FALSE;
-		else if (has_multi_table(stmt))
-			updatable = FALSE;
 	}
 MYPRINTF(0, "->%d\n", updatable);
 	if (stmt->updatable < 0)
