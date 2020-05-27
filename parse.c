@@ -606,40 +606,6 @@ static void xxxxx(StatementClass *stmt, FIELD_INFO *fi, QResultClass *res, int i
 	}
 }
 
-static BOOL has_multi_table(const StatementClass *stmt)
-{
-	BOOL multi_table = FALSE;
-	QResultClass	*res;
-
-MYLOG(DETAIL_LOG_LEVEL, "entering ntab=%d", stmt->ntab);
-	if (1 < stmt->ntab)
-		multi_table = TRUE;
-	else if (SC_has_join(stmt))
-		multi_table = TRUE;
-	else if (res = SC_get_Curres(stmt), NULL != res)
-	{
-		int	i, num_fields = QR_NumPublicResultCols(res);
-		OID	reloid = 0, greloid;
-
-		for (i = 0; i < num_fields; i++)
-		{
-			greloid = QR_get_relid(res, i);
-			if (0 != greloid)
-			{
-				if (0 == reloid)
-					reloid = greloid;
-				else if (reloid != greloid)
-				{
-MYPRINTF(DETAIL_LOG_LEVEL, " DOHHH i=%d %u!=%u ", i, reloid, greloid);
-					multi_table = TRUE;
-					break;
-				}
-			}
-		}
-	}
-MYPRINTF(DETAIL_LOG_LEVEL, " multi=%d\n", multi_table);
-	return multi_table;
-}
 /*
  *	SQLColAttribute tries to set the FIELD_INFO (using protocol 3).
  */
@@ -1138,7 +1104,7 @@ SC_set_SS_columnkey(StatementClass *stmt)
 MYLOG(DETAIL_LOG_LEVEL, "entering fields=" FORMAT_SIZE_T " ntab=%d\n", nfields, stmt->ntab);
 	if (!fi)		return ret;
 	if (0 >= nfields)	return ret;
-	if (!has_multi_table(stmt) && 1 == stmt->ntab)
+    for (i = 0; i < stmt->ntab; i++)
 	{
 		TABLE_INFO	**ti = stmt->ti, *oneti;
 		ConnectionClass *conn = SC_get_conn(stmt);
@@ -1149,7 +1115,7 @@ MYLOG(DETAIL_LOG_LEVEL, "entering fields=" FORMAT_SIZE_T " ntab=%d\n", nfields, 
 		ret = PGAPI_AllocStmt(conn, &pstmt, 0);
 		if (!SQL_SUCCEEDED(ret))
 			return ret;
-		oneti = ti[0];
+		oneti = ti[i];
 		ret = PGAPI_PrimaryKeys(pstmt, NULL, 0, NULL, 0, NULL, 0, oneti->table_oid);
 		if (!SQL_SUCCEEDED(ret))
 			goto cleanup;
