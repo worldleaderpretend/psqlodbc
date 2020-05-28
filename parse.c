@@ -1773,6 +1773,10 @@ MYLOG(0, "blevel=%d btoken=%s in_dot=%d in_field=%d tbname=%s\n", blevel, btoken
 			{
 				if (')' == token[0])
 					continue;
+				/*
+				 * TODO: need to account for inner joins of the form
+				 * SELECT * FROM table_a, table_b WHERE..
+				 */
 				if (stricmp(token, "LEFT") == 0 ||
 					stricmp(token, "RIGHT") == 0 ||
 					stricmp(token, "OUTER") == 0 ||
@@ -2165,7 +2169,7 @@ cleanup:
 		parse = FALSE;
 	}
 
-	MYLOG(0, "laving parse=%d, parse_status=%d\n", parse, SC_parsed_status(stmt));
+	MYLOG(MIN_LOG_LEVEL, "leaving parse=%d, parse_status=%d, join_info=%d\n", parse, SC_parsed_status(stmt), stmt->join_info);
 	return parse;
 }
 

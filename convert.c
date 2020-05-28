@@ -2618,6 +2618,10 @@ check_join(StatementClass *stmt, const char *curptr, size_t curpos)
 	wstmt++;
 	switch (tokenwd = endpos - stapos)
 	{
+		/*
+		 * TODO: need to account for inner joins of the form
+		 * SELECT * FROM table_a, table_b WHERE..
+		 */
 		case 4:
 			if (strnicmp(wstmt, "FULL", tokenwd) == 0 ||
 			    strnicmp(wstmt, "LEFT", tokenwd) == 0)
@@ -2643,6 +2647,8 @@ check_join(StatementClass *stmt, const char *curptr, size_t curpos)
 			SC_set_outer_join(stmt);
 		else
 			SC_set_inner_join(stmt);
+
+		MYLOG(DETAIL_LOG_LEVEL, "join_info=%d\n", stmt->join_info);
 	}
 	return TRUE;
 }
