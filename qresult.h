@@ -55,7 +55,7 @@ struct QResultClass_
 	ColumnInfoClass *fields;	/* the Column information */
 	ConnectionClass *conn;		/* the connection this result is using
 								 * (backend) */
-	QResultClass	*next;		/* the following result class */
+	QResultClass	*lnext;		/* the following result class */
 
 	/* Stuff for declare/fetch tuples */
 	SQLULEN		num_total_read;	/* the highest absolute position ever read in + 1 */
@@ -189,6 +189,10 @@ do { \
 	MYLOG(1, "to " FORMAT_LEN " to next read\n", self->fetch_number); \
 } while (0)
 
+#define	QR_concat(self, a)	((self)->lnext=(a))
+#define	QR_detach(self)	((self)->lnext=NULL)
+#define	QR_nextr(self)	((self)->lnext)
+
 #define QR_get_message(self)		((self)->message ? (self)->message : (self)->messageref)
 #define QR_get_command(self)				(self->command)
 #define QR_get_notice(self)				(self->notice)
@@ -267,6 +271,19 @@ qlog("QR_REALLOC_error\n"); \
 		QR_free_memory(a); \
 		QR_set_messageref(a, m); \
 		return r; \
+	} \
+	t = tmp; \
+} while (0)
+#define	QR_REALLOC_gexit_with_error(t, tp, s, a, m, r) \
+do { \
+	tp *tmp; \
+	if (tmp = (tp *) realloc(t, s), NULL == tmp) \
+	{ \
+		QR_set_rstatus(a, PORES_NO_MEMORY_ERROR); \
+		QR_free_memory(a); \
+		QR_set_messageref(a, m); \
+		r; \
+		goto cleanup; \
 	} \
 	t = tmp; \
 } while (0)

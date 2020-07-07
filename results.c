@@ -1828,7 +1828,12 @@ MYLOG(DETAIL_LOG_LEVEL, "num_tuples=" FORMAT_LEN "\n", num_tuples);
 		if (SQL_RD_ON == stmt->options.retrieve_data ||
 		    flag != 0)
 		{
-			SC_pos_reload_needed(stmt, reqsize, flag);
+			RETCODE ret = SC_pos_reload_needed(stmt, reqsize, flag);
+			if (!SQL_SUCCEEDED(ret))
+			{
+				result = ret;
+				goto cleanup;
+			}
 		}
 	}
 	/* Physical Row advancement occurs for each row fetched below */
@@ -1979,7 +1984,7 @@ PGAPI_MoreResults(HSTMT hstmt)
 	res = SC_get_Curres(stmt);
 	if (res)
 	{
-		res = res->next;
+		res = QR_nextr(res);
 		SC_set_Curres(stmt, res);
 	}
 	if (res)
@@ -3018,7 +3023,7 @@ ProcessRollback(ConnectionClass *conn, BOOL undo, BOOL partial)
 	{
 		if (stmt = conn->stmts[i], !stmt)
 			continue;
-		for (res = SC_get_Result(stmt); res; res = res->next)
+		for (res = SC_get_Result(stmt); res; res = QR_nextr(res))
 		{
 			if (undo)
 				UndoRollback(stmt, res, partial);
@@ -3287,7 +3292,13 @@ SC_pos_reload_with_key(StatementClass *stmt, SQLULEN global_ridx, UInt2 *count, 
 			KeySetSet(tuple_new, qres->num_fields, res->num_key_fields, res->keyset + kres_ridx, FALSE);
 			MoveCachedRows(tuple_old, tuple_new, effective_fields, 1);
 		}
-		ret = SQL_SUCCESS;
+		if (rcnt > 1)
+		{
+			ret = SQL_SUCCESS_WITH_INFO;
+			SC_set_error(stmt, STMT_ROW_VERSION_CHANGED, "more than one row were update/deleted?", func);
+		}
+		else
+			ret = SQL_SUCCESS;
 	}
 	else
 	{
@@ -3456,7 +3467,7 @@ static SQLLEN LoadFromKeyset(StatementClass *stmt, QResultClass * res, int rows_
 					{
 						SC_set_error(stmt, STMT_EXEC_ERROR, "Prepare for Data Load Error", func);
 						rcnt = -1;
-						QR_Destructor(qres);
+						SC_set_Result(stmt, qres);
 						break;
 					}
 					QR_Destructor(qres);
@@ -3471,7 +3482,8 @@ static SQLLEN LoadFromKeyset(StatementClass *stmt, QResultClass * res, int rows_
 				printfPQExpBuffer(&qval, "%s where ctid in (", stmt->load_statement);
 			}
 		}
-		if (0 != (res->keyset[kres_ridx].status & CURS_NEEDS_REREAD))
+		if (rcnt >= 0 &&
+		    0 != (res->keyset[kres_ridx].status & CURS_NEEDS_REREAD))
 		{
 			getTid(res, kres_ridx, &blocknum, &offset);
 			if (rowc)
@@ -3575,7 +3587,7 @@ MYLOG(0, "entering in rows_per_fetch=%d limitrow=" FORMAT_LEN "\n", rows_per_fet
 			{
 				SC_set_error(stmt, STMT_EXEC_ERROR, "Data Load Error", __FUNCTION__);
 				rcnt = -1;
-				QR_Destructor(qres);
+				SC_set_Result(stmt, qres);
 				break;
 			}
 			QR_Destructor(qres);
@@ -3630,10 +3642,11 @@ SC_pos_reload_needed(StatementClass *stmt, SQLULEN req_size, UDWORD flag)
 	BOOL		create_from_scratch = (0 != flag);
 
 	MYLOG(0, "entering\n");
+#define	return	DONT_CALL_RETURN_FROM_HERE???
 	if (!(res = SC_get_Curres(stmt)))
 	{
 		SC_set_error(stmt, STMT_INVALID_CURSOR_STATE_ERROR, "Null statement result in SC_pos_reload_needed.", func);
-		return SQL_ERROR;
+		goto cleanup;
 	}
 	if (SC_update_not_ready(stmt))
 		parse_statement(stmt, TRUE);	/* not preferable */
@@ -3641,7 +3654,7 @@ SC_pos_reload_needed(StatementClass *stmt, SQLULEN req_size, UDWORD flag)
 	{
 		stmt->options.scroll_concurrency = SQL_CONCUR_READ_ONLY;
 		SC_set_error(stmt, STMT_INVALID_OPTION_IDENTIFIER, "the statement is read-only", func);
-		return SQL_ERROR;
+		goto cleanup;
 	}
 	rows_per_fetch = 0;
 	req_rows_size = QR_get_reqsize(res);
@@ -3669,7 +3682,7 @@ SC_pos_reload_needed(StatementClass *stmt, SQLULEN req_size, UDWORD flag)
 		SQLLEN	brows = GIdx2RowIdx(limitrow, stmt);
 		if (brows > res->count_backend_allocated)
 		{
-			QR_REALLOC_return_with_error(res->backend_tuples, TupleField, sizeof(TupleField) * res->num_fields * brows, res, "pos_reload_needed failed", SQL_ERROR);
+			QR_REALLOC_gexit_with_error(res->backend_tuples, TupleField, sizeof(TupleField) * res->num_fields * brows, res, "pos_reload_needed failed", ret = SQL_ERROR);
 			res->count_backend_allocated = brows;
 		}
 		if (brows > 0)
@@ -3677,7 +3690,10 @@ SC_pos_reload_needed(StatementClass *stmt, SQLULEN req_size, UDWORD flag)
 		QR_set_num_cached_rows(res, brows);
 		QR_set_rowstart_in_cache(res, 0);
 		if (SQL_RD_ON != stmt->options.retrieve_data)
-			return SQL_SUCCESS;
+		{
+			ret = SQL_SUCCESS;
+			goto cleanup;
+		}
 		for (i = SC_get_rowset_start(stmt), kres_ridx = GIdx2KResIdx(i, stmt,res); i < limitrow; i++, kres_ridx++)
 		{
 			if (0 == (res->keyset[kres_ridx].status & (CURS_SELF_DELETING | CURS_SELF_DELETED | CURS_OTHER_DELETED)))
@@ -3688,12 +3704,12 @@ SC_pos_reload_needed(StatementClass *stmt, SQLULEN req_size, UDWORD flag)
 	{
 		if (rowc = LoadFromKeyset_inh(stmt, res, rows_per_fetch, limitrow), rowc < 0)
 		{
-			return SQL_ERROR;
+			goto cleanup;
 		}
 	}
 	else if (rowc = LoadFromKeyset(stmt, res, rows_per_fetch, limitrow), rowc < 0)
 	{
-		return SQL_ERROR;
+		goto cleanup;
 	}
 	for (i = SC_get_rowset_start(stmt), kres_ridx = GIdx2KResIdx(i, stmt, res); i < limitrow; i++)
 	{
@@ -3702,7 +3718,7 @@ SC_pos_reload_needed(StatementClass *stmt, SQLULEN req_size, UDWORD flag)
 			ret = SC_pos_reload(stmt, i, &qcount, 0);
 			if (SQL_ERROR == ret)
 			{
-				break;
+				goto cleanup;
 			}
 			if (SQL_ROW_DELETED == (res->keyset[kres_ridx].status & KEYSET_INFO_PUBLIC))
 			{
@@ -3711,7 +3727,11 @@ SC_pos_reload_needed(StatementClass *stmt, SQLULEN req_size, UDWORD flag)
 			res->keyset[kres_ridx].status &= ~CURS_NEEDS_REREAD;
 		}
 	}
+	ret = SQL_SUCCESS;
 	res->dataFilled = TRUE;
+
+cleanup:
+#undef return
 	return ret;
 }
 
@@ -3864,8 +3884,8 @@ irow_update(RETCODE ret, StatementClass *stmt, StatementClass *ustmt, SQLULEN gl
 			}
 			else if (updcnt == 0)
 			{
-				SC_set_error(stmt, STMT_ROW_VERSION_CHANGED, "the content was changed before updation", func);
-				ret = SQL_ERROR;
+				SC_set_error(stmt, STMT_ROW_VERSION_CHANGED, "the content was changed before updates", func);
+				ret = SQL_SUCCESS_WITH_INFO;
 				if (stmt->options.cursor_type == SQL_CURSOR_KEYSET_DRIVEN)
 					SC_pos_reload(stmt, global_ridx, (UInt2 *) 0, 0);
 			}
@@ -3935,8 +3955,14 @@ MYLOG(DETAIL_LOG_LEVEL, "irow_update ret=%d,%d\n", ret, SC_get_errornumber(s->qs
 			case SQL_SUCCESS:
 				s->irdflds->rowStatusArray[s->irow] = SQL_ROW_UPDATED;
 				break;
+			case SQL_NO_DATA_FOUND:
+			case SQL_SUCCESS_WITH_INFO:
+				s->irdflds->rowStatusArray[s->irow] = SQL_ROW_SUCCESS_WITH_INFO;
+				ret = SQL_SUCCESS_WITH_INFO;
+				break;
+			case SQL_ERROR:
 			default:
-				s->irdflds->rowStatusArray[s->irow] = ret;
+				s->irdflds->rowStatusArray[s->irow] = SQL_ROW_ERROR;
 		}
 	}
 
@@ -4267,8 +4293,8 @@ SC_pos_delete(StatementClass *stmt,
 			}
 			else if (dltcnt == 0)
 			{
-				SC_set_error(stmt, STMT_ROW_VERSION_CHANGED, "the content was changed before deletion", func);
-				ret = SQL_ERROR;
+				SC_set_error(stmt, STMT_ROW_VERSION_CHANGED, "the content was changed before deletes", func);
+				ret = SQL_SUCCESS_WITH_INFO;
 				if (idx_exist && stmt->options.cursor_type == SQL_CURSOR_KEYSET_DRIVEN)
 					SC_pos_reload(stmt, global_ridx, (UInt2 *) 0, 0);
 			}
@@ -4314,8 +4340,15 @@ MYLOG(DETAIL_LOG_LEVEL, ".status[" FORMAT_ULEN "]=%x\n", global_ridx, res->keyse
 			case SQL_SUCCESS:
 				irdflds->rowStatusArray[irow] = SQL_ROW_DELETED;
 				break;
+			case SQL_NO_DATA_FOUND:
+			case SQL_SUCCESS_WITH_INFO:
+				irdflds->rowStatusArray[irow] = SQL_ROW_DELETED; // SQL_ROW_SUCCESS_WITH_INFO;
+				ret = SQL_SUCCESS_WITH_INFO;
+				break;
+			case SQL_ERROR:
 			default:
-				irdflds->rowStatusArray[irow] = ret;
+				irdflds->rowStatusArray[irow] = SQL_ROW_ERROR;
+				break;
 		}
 	}
 
@@ -4341,7 +4374,7 @@ irow_insert(RETCODE ret, StatementClass *stmt, StatementClass *istmt,
 		const char *cmdstr;
 		BindInfoClass	*bookmark;
 
-		tres = (ires->next ? ires->next : ires);
+		tres = (QR_nextr(ires) ? QR_nextr(ires) : ires);
 		cmdstr = QR_get_command(tres);
 		if (cmdstr &&
 			sscanf(cmdstr, "INSERT %u %d", &oid, &addcnt) == 2 &&
@@ -4448,8 +4481,12 @@ pos_add_callback(RETCODE retcode, void *para)
 			case SQL_SUCCESS:
 				s->irdflds->rowStatusArray[s->irow] = SQL_ROW_ADDED;
 				break;
+			case SQL_NO_DATA_FOUND:
+			case SQL_SUCCESS_WITH_INFO:
+				s->irdflds->rowStatusArray[s->irow] = SQL_ROW_SUCCESS_WITH_INFO;
+				break;
 			default:
-				s->irdflds->rowStatusArray[s->irow] = ret;
+				s->irdflds->rowStatusArray[s->irow] = SQL_ROW_ERROR;
 		}
 	}
 
@@ -4677,15 +4714,15 @@ SC_pos_refresh(StatementClass *stmt, SQLSETPOSIROW irow , SQLULEN global_ridx)
 	{
 		switch (ret)
 		{
-			case SQL_ERROR:
-				irdflds->rowStatusArray[irow] = SQL_ROW_ERROR;
-				break;
 			case SQL_SUCCESS:
 				irdflds->rowStatusArray[irow] = SQL_ROW_SUCCESS;
 				break;
 			case SQL_SUCCESS_WITH_INFO:
+				irdflds->rowStatusArray[irow] = SQL_ROW_SUCCESS_WITH_INFO;
+				break;
+			case SQL_ERROR:
 			default:
-				irdflds->rowStatusArray[irow] = ret;
+				irdflds->rowStatusArray[irow] = SQL_ROW_ERROR;
 				break;
 		}
 	}
@@ -5134,7 +5171,7 @@ MYLOG(0, "i=%d bidx=" FORMAT_LEN " cached=" FORMAT_ULEN "\n", i, bidx, res->num_
 	QR_set_num_cached_rows(res, size_of_rowset);
 	res->num_total_read = size_of_rowset;
 	rowStatusArray = (SC_get_IRDF(stmt))->rowStatusArray;
-	for (i = 0, qres = res; i < size_of_rowset && NULL != qres; i++, qres = qres->next)
+	for (i = 0, qres = res; i < size_of_rowset && NULL != qres; i++, qres = QR_nextr(qres))
 	{
 		if (1 == QR_get_num_cached_tuples(qres))
 		{
